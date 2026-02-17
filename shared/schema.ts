@@ -99,7 +99,7 @@ export interface TattooSession {
 }
 
 export const placementSuggestRequestSchema = z.object({
-  frames: z.array(z.string()).min(1).max(3),
+  frames: z.array(z.string()).max(3),
   designDescription: z.string().optional(),
   bodyPart: z.string().optional(),
 });

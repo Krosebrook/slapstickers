@@ -1,7 +1,14 @@
 import { GoogleGenAI } from "@google/genai";
 import type { AiPlacementResponse, AiDesignRemixResponse } from "@shared/schema";
 
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+let _ai: GoogleGenAI | null = null;
+function getAi(): GoogleGenAI | null {
+  if (!process.env.GEMINI_API_KEY) return null;
+  if (!_ai) {
+    _ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  }
+  return _ai;
+}
 
 const SAFE_PLACEMENT_DEFAULT: AiPlacementResponse = {
   provider: 'gemini',
@@ -76,7 +83,10 @@ Provide 1-3 placement suggestions. Consider muscle contours, skin flatness, and 
       prompt,
     ];
 
-    const response = await ai.models.generateContent({
+    const client = getAi();
+    if (!client) return SAFE_PLACEMENT_DEFAULT;
+
+    const response = await client.models.generateContent({
       model: "gemini-2.5-flash",
       contents: contents,
       config: {
@@ -155,7 +165,10 @@ Provide 1-3 suggestions focusing on blend modes, opacity, and warp to make the p
       prompt,
     ];
 
-    const response = await ai.models.generateContent({
+    const client = getAi();
+    if (!client) return SAFE_REMIX_DEFAULT;
+
+    const response = await client.models.generateContent({
       model: "gemini-2.5-flash",
       contents: contents,
       config: {
@@ -183,7 +196,10 @@ export async function detectFaceInImage(imageBase64: string): Promise<boolean> {
   }
 
   try {
-    const response = await ai.models.generateContent({
+    const client = getAi();
+    if (!client) return false;
+
+    const response = await client.models.generateContent({
       model: "gemini-2.5-flash",
       contents: [
         {
