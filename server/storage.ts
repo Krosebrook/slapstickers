@@ -1,38 +1,61 @@
-import { type User, type InsertUser } from "@shared/schema";
+import * as fs from "fs";
+import * as path from "path";
 import { randomUUID } from "crypto";
 
-// modify the interface with any CRUD methods
-// you might need
+const UPLOAD_DIR = path.resolve(process.cwd(), "uploads");
+const TTL_HOURS = 24;
 
-export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  createUser(user: InsertUser): Promise<User>;
-}
-
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
-
-  constructor() {
-    this.users = new Map();
-  }
-
-  async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
-  }
-
-  async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
-  }
-
-  async createUser(insertUser: InsertUser): Promise<User> {
-    const id = randomUUID();
-    const user: User = { ...insertUser, id };
-    this.users.set(id, user);
-    return user;
+export function ensureUploadDir(): void {
+  if (!fs.existsSync(UPLOAD_DIR)) {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
   }
 }
 
-export const storage = new MemStorage();
+export function getUploadDir(): string {
+  ensureUploadDir();
+  return UPLOAD_DIR;
+}
+
+export function getSessionDir(sessionId: string): string {
+  const dir = path.join(UPLOAD_DIR, sessionId);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+export function deleteSessionDir(sessionId: string): boolean {
+  const dir = path.join(UPLOAD_DIR, sessionId);
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    return true;
+  }
+  return false;
+}
+
+export function cleanupOldUploads(): number {
+  ensureUploadDir();
+  const now = Date.now();
+  const ttlMs = TTL_HOURS * 60 * 60 * 1000;
+  let cleaned = 0;
+
+  try {
+    const entries = fs.readdirSync(UPLOAD_DIR);
+    for (const entry of entries) {
+      const entryPath = path.join(UPLOAD_DIR, entry);
+      const stat = fs.statSync(entryPath);
+      if (now - stat.mtimeMs > ttlMs) {
+        fs.rmSync(entryPath, { recursive: true, force: true });
+        cleaned++;
+      }
+    }
+  } catch (err) {
+    console.error("Cleanup error:", err);
+  }
+
+  return cleaned;
+}
+
+export function generateSessionId(): string {
+  return randomUUID();
+}
