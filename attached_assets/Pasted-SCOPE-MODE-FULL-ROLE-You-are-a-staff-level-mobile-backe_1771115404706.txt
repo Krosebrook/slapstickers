@@ -1,0 +1,166 @@
+SCOPE_MODE: FULL
+
+ROLE:
+You are a staff-level mobile + backend engineer building a production-grade tattoo preview MOBILE APP ("Tattoo Shop") with a secure backend proxy. Build it end-to-end with no placeholders. Do NOT embed any API keys in the mobile app. Use server environment variables only. Include error handling, rate limiting, input validation, logging, basic auth, and tests. Produce the full file tree and complete code for every file.
+
+PRIMARY GOAL:
+Users can upload a tattoo design (PNG/SVG), capture or import a short body-only video (5–8s), place/scale/rotate the design, and export a preview video where the tattoo looks like ink on skin. Also: incorporate Gemini Generative AI for placement suggestions and smart masking guidance. Also: offer an optional "Cinematic AI Preview" button that attempts OpenAI Video API with model "sora-2" ONLY when inputs contain NO faces; otherwise it must fall back to local compositing and explain why. The app must function fully without Sora access.
+
+HARD CONSTRAINTS / SAFETY + RELIABILITY:
+1) Sora constraint handling:
+   - Assume some OpenAI accounts may NOT have Sora-2 access.
+   - Assume OpenAI Video API may reject human faces in input images.
+   - Implement face detection gate BEFORE any Sora call. If face detected OR Sora call fails, return structured error:
+     { error_code: "SORA_UNAVAILABLE_OR_BLOCKED", fallback: "LOCAL_OVERLAY_EXPORT", detail: "..." }
+   - The UX must never dead-end; always produce a usable local preview video.
+
+2) Secrets:
+   - Mobile app must never contain OpenAI or Gemini keys.
+   - Backend reads: OPENAI_API_KEY, GEMINI_API_KEY from env vars (Replit Secrets).
+   - Provide .env.example for backend only.
+
+3) Upload/data:
+   - Validate file types: PNG/JPG/WEBP for photos, MP4/MOV for videos, PNG/SVG for designs.
+   - Enforce max sizes: design <= 10MB, video <= 50MB, image <= 15MB.
+   - Add TTL cleanup for uploads (e.g., delete local temp files older than 24h).
+   - Provide a delete endpoint per session.
+
+4) Determinism:
+   - The local compositor must be deterministic and work offline after the capture step.
+   - AI is advisory (placement suggestions) not required to render.
+
+STACK:
+- Monorepo:
+  /apps/mobile  -> Expo React Native + TypeScript
+  /apps/api     -> Node.js + Express + TypeScript
+  /packages/shared -> shared types + zod schemas
+
+Mobile libs (choose stable, Expo-compatible):
+- expo-camera (capture)
+- expo-av (playback)
+- expo-file-system (files)
+- expo-media-library (save to gallery)
+- react-native-gesture-handler + reanimated (editor gestures)
+- zod (validation shared types)
+- optional: @shopify/react-native-skia for rendering overlays if feasible; otherwise use Canvas-like approach with a well-supported Expo-friendly method.
+
+Backend libs:
+- express, cors, helmet
+- express-rate-limit
+- multer (uploads)
+- zod + zod-to-json-schema (validation)
+- pino (logging)
+- node-cron (cleanup job)
+- jest or vitest + supertest (route tests)
+
+ARCHITECTURE:
+- Mobile calls backend for AI only:
+  - POST /v1/ai/placement-suggest  (Gemini)
+  - POST /v1/ai/design-remix       (Gemini or OpenAI; prefer Gemini)
+  - POST /v1/ai/video-generate     (OpenAI Sora 2 attempt; feature-flagged)
+  - GET  /v1/usage                 (basic metering)
+- Mobile does local rendering/export:
+  - overlay tattoo onto captured video and export a final MP4
+  - export 3 still images from the chosen frame(s)
+  - create an "Approval Packet" JSON and optionally upload it to backend
+
+CORE USER FLOWS (MVP):
+1) Home:
+   - Start New Preview (video)
+   - Import Existing Video
+   - View Past Sessions
+
+2) New Session Wizard:
+   Step A: Capture/import body-only video (5–8s) with an on-screen rule: "Keep face out of frame"
+   Step B: Upload tattoo design (PNG/SVG)
+   Step C: Editor: drag/scale/rotate + opacity + blend + warp slider (simple)
+   Step D: AI Assist:
+     - "Suggest placement" -> sends 1–3 keyframes (compressed) to backend; receives JSON suggestions
+     - "Improve realism" -> receives advice + recommended blend settings
+   Step E: Export:
+     - "Generate Preview Video" -> local export
+     - "Save to Gallery" + "Share"
+     - Optional: "Cinematic AI Preview" -> tries backend Sora; if blocked/unavailable -> fallback explanation + still export local
+
+3) Session Detail:
+   - shows exported media
+   - shows AI notes
+   - shows approval packet
+   - delete session
+
+APPROVAL PACKET (OUTPUT CONTRACT):
+Create a strongly typed JSON file for every session:
+{
+  sessionId,
+  createdAt,
+  design: { originalName, mimeType, hashSha256, normalizedPngPath? },
+  media: { sourceVideoPath, exportedVideoPath, stills: [path,path,path] },
+  placement: { anchorX, anchorY, scale, rotationDeg, opacity, blendMode, warpIntensity },
+  ai: { provider:"gemini", placementNotes, recommendedSizeCmRange, confidence, warnings:[] },
+  cinematic: { attempted:boolean, success:boolean, provider:"openai-sora-2", videoUrl?:string, error?:{code,detail,fallback} },
+  consent: { faceFreeConfirmed:boolean }
+}
+
+GEMINI INTEGRATION (BACKEND):
+- Use Gemini for:
+  - placement suggestion from 1–3 image frames
+  - produce structured JSON output using a strict schema (zod on server; enforce exact keys)
+- Return ONLY schema-valid JSON; if model fails, return a safe default with low confidence.
+
+OPENAI SORA2 INTEGRATION (BACKEND):
+- Feature flag: ENABLE_SORA=true
+- Endpoint: POST /v1/ai/video-generate
+  Input: { prompt, referenceImage?: file, durationSeconds: 5-8 }
+  Behavior:
+   - Run face detection first on referenceImage if present. If face found -> return blocked with fallback.
+   - Call OpenAI Video API with model "sora-2" if enabled.
+   - Poll status until completion or timeout (max 60s). If not completed -> return fallback.
+   - Provide generated video URL/content.
+- Must be resilient: if OpenAI returns 401/403/404 or model unavailable -> fallback.
+
+FACE DETECTION GATE:
+- Implement on backend AND on mobile for belt-and-suspenders.
+- Mobile: fast face detection using an Expo-compatible approach (if MLKit is too heavy, implement a simple "face in frame" heuristic with user confirmation checkbox + optional server-side detection).
+- Backend: use a lightweight face detection library feasible in Node (if hard, implement strict framing: reject images whose EXIF/metadata or aspect indicates likely headshot AND require explicit user confirmation; but prefer actual detection).
+- If you cannot implement reliable face detection in Node, implement a safe alternative: require user to crop to region-of-interest and enforce that the crop box excludes top 30% of the frame; document why.
+
+LOCAL VIDEO OVERLAY EXPORT:
+- Implement a reliable export pipeline:
+  - Extract frames
+  - Composite tattoo onto frames with blend/warp
+  - Re-encode to MP4
+- If full frame-by-frame export is too heavy for MVP on device, implement a phased approach:
+  - MVP: overlay during playback + export a "screen-record style" output OR a per-frame pipeline at reduced resolution.
+  - Must include a clear performance budget and fallback to photo-only export if video export fails.
+
+TESTING:
+- Backend:
+  - Unit tests for zod validation
+  - Integration tests for endpoints using supertest:
+    - rejects bad file types
+    - rate limit triggers
+    - Sora endpoint returns fallback when disabled
+- Mobile:
+  - Smoke test checklist in TESTING.md
+
+DOCS:
+- README.md: setup, running mobile (Expo Go) and backend on Replit, environment variables, troubleshooting.
+- SECURITY.md: why keys are server-side, upload retention, delete flow.
+- DEPLOYMENT.md: how to deploy backend on Replit and configure mobile base URL.
+
+OUTPUT FORMAT:
+1) Print full file tree.
+2) For each file: provide full contents.
+3) Provide runbook:
+   - Set Replit secrets
+   - Start API
+   - Start Expo
+   - Test flows
+4) Provide acceptance criteria checklist.
+5) End with CLAIMS CHECK + counterexamples/contradictions.
+
+IMPORTANT:
+- No placeholders.
+- No "TODO" stubs.
+- If a feature is too heavy for MVP, implement a real fallback that still produces user value.
+- Keep UX clean, modern, and mobile-friendly.
