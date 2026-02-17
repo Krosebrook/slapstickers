@@ -1,26 +1,26 @@
 {
   "expo": {
-    "name": "My App",
-    "slug": "my-app",
+    "name": "Tattoo Shop",
+    "slug": "tattoo-shop",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
+    "scheme": "tattooshop",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0D0D0D"
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.myapp"
+      "bundleIdentifier": "com.tattooshop.app"
     },
     "android": {
-      "package": "com.myapp",
+      "package": "com.tattooshop.app",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#0D0D0D",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
@@ -37,7 +37,20 @@
         }
       ],
       "expo-font",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Tattoo Shop to access your camera to capture body video for tattoo preview."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Allow Tattoo Shop to save tattoo previews to your photo library.",
+          "savePhotosPermission": "Allow Tattoo Shop to save tattoo previews to your photo library."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
