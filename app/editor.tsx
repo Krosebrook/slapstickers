@@ -55,6 +55,9 @@ export default function EditorScreen() {
   const [aiNotes, setAiNotes] = useState('');
   const [showControls, setShowControls] = useState(true);
   const [bodyImageUri, setBodyImageUri] = useState(session?.bodyImageUri || '');
+  const [pinMode, setPinMode] = useState(false);
+  const [premiumLoading, setPremiumLoading] = useState(false);
+  const [previewMode, setPreviewMode] = useState<'fresh' | 'healed'>(session?.previewMode ?? 'fresh');
 
   const webTopInset = Platform.OS === 'web' ? 67 : 0;
 
@@ -105,7 +108,9 @@ export default function EditorScreen() {
       setRotation(animRotation.value);
     });
 
-  const composed = Gesture.Simultaneous(panGesture, pinchGesture, rotateGesture);
+  const composed = pinMode
+    ? Gesture.Simultaneous(pinchGesture, rotateGesture)
+    : Gesture.Simultaneous(panGesture, pinchGesture, rotateGesture);
 
   const tattooStyle = useAnimatedStyle(() => ({
     transform: [
@@ -114,7 +119,7 @@ export default function EditorScreen() {
       { scale: animScale.value },
       { rotate: `${animRotation.value}deg` },
     ],
-    opacity: opacity,
+    opacity: previewMode === 'healed' ? opacity * 0.75 : opacity,
   }));
 
   const pickBodyImage = async () => {
@@ -223,6 +228,50 @@ export default function EditorScreen() {
     }
   };
 
+  const handleSubmitPremiumJob = async () => {
+    if (!session) return;
+    setPremiumLoading(true);
+    try {
+      const anchorX = 0.5 + translateX.value / CANVAS_WIDTH;
+      const anchorY = 0.5 + translateY.value / CANVAS_HEIGHT;
+      const currentPlacement = {
+        anchorX: Math.max(0, Math.min(1, anchorX)),
+        anchorY: Math.max(0, Math.min(1, anchorY)),
+        scale,
+        rotationDeg: rotation,
+        opacity,
+        blendMode,
+        warpIntensity,
+      };
+
+      const res = await apiRequest('POST', '/api/v1/jobs/submit', {
+        type: 'premium_still',
+        sessionId: session.id,
+        inputData: {
+          placement: currentPlacement,
+          previewMode,
+        },
+      });
+      const data = await res.json();
+      if (data.id) {
+        if (Platform.OS !== 'web') {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+        setAiNotes(`Premium render submitted! Job ID: ${data.id.slice(0, 8)}... Status: ${data.status}`);
+
+        updateSession(session.id, {
+          jobIds: [...(session.jobIds || []), data.id],
+          previewMode,
+        });
+      }
+    } catch (err) {
+      console.error('Premium job submit failed:', err);
+      setAiNotes('Premium render unavailable. Continue with real-time preview.');
+    } finally {
+      setPremiumLoading(false);
+    }
+  };
+
   const handleExport = () => {
     if (!session) return;
     const anchorX = 0.5 + translateX.value / CANVAS_WIDTH;
@@ -241,6 +290,7 @@ export default function EditorScreen() {
       bodyImageUri: bodyImageUri || undefined,
       aiNotes: aiNotes || undefined,
       status: 'editing',
+      previewMode,
     });
 
     router.push({ pathname: '/session-detail', params: { id: session.id, fromEditor: '1' } });
@@ -262,6 +312,20 @@ export default function EditorScreen() {
           <Ionicons name="chevron-back" size={24} color={Colors.dark.text} />
         </Pressable>
         <Text style={styles.headerTitle} numberOfLines={1}>{session.name}</Text>
+        <Pressable
+          onPress={() => {
+            setPinMode(!pinMode);
+            if (Platform.OS !== 'web') Haptics.selectionAsync();
+          }}
+          hitSlop={12}
+          style={styles.pinBtn}
+        >
+          <Ionicons
+            name={pinMode ? 'pin' : 'pin-outline'}
+            size={20}
+            color={pinMode ? Colors.dark.tint : Colors.dark.textSecondary}
+          />
+        </Pressable>
         <Pressable
           onPress={() => setShowControls(!showControls)}
           hitSlop={12}
@@ -424,6 +488,43 @@ export default function EditorScreen() {
                 </Pressable>
               ))}
             </View>
+          </View>
+
+          <View style={styles.toggleSection}>
+            <Text style={styles.blendLabel}>Preview Mode</Text>
+            <View style={styles.blendRow}>
+              <Pressable
+                onPress={() => {
+                  setPreviewMode('fresh');
+                  if (Platform.OS !== 'web') Haptics.selectionAsync();
+                }}
+                style={[styles.blendChip, previewMode === 'fresh' && styles.blendChipActive]}
+              >
+                <Text style={[styles.blendChipText, previewMode === 'fresh' && styles.blendChipTextActive]}>Fresh Ink</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  setPreviewMode('healed');
+                  if (Platform.OS !== 'web') Haptics.selectionAsync();
+                }}
+                style={[styles.blendChip, previewMode === 'healed' && styles.blendChipActive]}
+              >
+                <Text style={[styles.blendChipText, previewMode === 'healed' && styles.blendChipTextActive]}>Healed</Text>
+              </Pressable>
+            </View>
+          </View>
+
+          <View style={styles.premiumSection}>
+            <Text style={styles.blendLabel}>Premium Render</Text>
+            <Text style={styles.premiumDesc}>AI-enhanced tattoo within mask only. Takes ~2 minutes.</Text>
+            <ActionButton
+              title="Premium Still"
+              icon="diamond-outline"
+              onPress={handleSubmitPremiumJob}
+              variant="secondary"
+              size="small"
+              loading={premiumLoading}
+            />
           </View>
 
           <View style={styles.exportSection}>
@@ -601,6 +702,30 @@ const styles = StyleSheet.create({
   },
   blendChipTextActive: {
     color: Colors.dark.tint,
+  },
+  toggleSection: {
+    marginBottom: 20,
+  },
+  premiumSection: {
+    marginBottom: 20,
+    backgroundColor: Colors.dark.surfaceElevated,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.dark.border,
+  },
+  premiumDesc: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.dark.textSecondary,
+    marginBottom: 10,
+    lineHeight: 17,
+  },
+  pinBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   exportSection: {
     flexDirection: 'row',

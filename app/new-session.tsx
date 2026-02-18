@@ -22,13 +22,28 @@ import ActionButton from '@/components/ActionButton';
 
 export default function NewSessionScreen() {
   const insets = useSafeAreaInsets();
-  const { createSession } = useSessions();
+  const { createSession, updateSession } = useSessions();
   const [sessionName, setSessionName] = useState('');
   const [designUri, setDesignUri] = useState('');
   const [designName, setDesignName] = useState('');
   const [bodyImageUri, setBodyImageUri] = useState('');
   const [faceFreeConfirmed, setFaceFreeConfirmed] = useState(false);
+  const [ageVerified, setAgeVerified] = useState(false);
+  const [contentConsent, setContentConsent] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+
+  const toggleFaceFree = () => {
+    setFaceFreeConfirmed(!faceFreeConfirmed);
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+  const toggleAge = () => {
+    setAgeVerified(!ageVerified);
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+  const toggleConsent = () => {
+    setContentConsent(!contentConsent);
+    if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
 
   const webTopInset = Platform.OS === 'web' ? 67 : 0;
 
@@ -104,6 +119,13 @@ export default function NewSessionScreen() {
         designName,
         bodyImageUri || undefined,
       );
+      const consent = {
+        faceFreeConfirmed,
+        ageVerified,
+        contentConsent,
+        timestamp: new Date().toISOString(),
+      };
+      await updateSession(session.id, { consent });
       if (Platform.OS !== 'web') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
@@ -116,7 +138,7 @@ export default function NewSessionScreen() {
     }
   };
 
-  const canCreate = designUri && sessionName.trim() && faceFreeConfirmed;
+  const canCreate = designUri && sessionName.trim() && faceFreeConfirmed && ageVerified && contentConsent;
 
   return (
     <KeyboardAvoidingView
@@ -205,19 +227,28 @@ export default function NewSessionScreen() {
           </View>
 
           <View style={styles.section}>
-            <Pressable
-              onPress={() => {
-                setFaceFreeConfirmed(!faceFreeConfirmed);
-                if (Platform.OS !== 'web') Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              }}
-              style={styles.checkboxRow}
-            >
+            <Text style={styles.sectionTitle}>Safety & Consent</Text>
+            <Text style={styles.sectionDesc}>Required before processing</Text>
+
+            <Pressable onPress={toggleAge} style={styles.checkboxRow}>
+              <View style={[styles.checkbox, ageVerified && styles.checkboxChecked]}>
+                {ageVerified && <Ionicons name="checkmark" size={16} color="#FFF" />}
+              </View>
+              <Text style={styles.checkboxLabel}>I confirm I am 18 years or older</Text>
+            </Pressable>
+
+            <Pressable onPress={toggleConsent} style={[styles.checkboxRow, { marginTop: 10 }]}>
+              <View style={[styles.checkbox, contentConsent && styles.checkboxChecked]}>
+                {contentConsent && <Ionicons name="checkmark" size={16} color="#FFF" />}
+              </View>
+              <Text style={styles.checkboxLabel}>I consent to processing my media for tattoo preview</Text>
+            </Pressable>
+
+            <Pressable onPress={toggleFaceFree} style={[styles.checkboxRow, { marginTop: 10 }]}>
               <View style={[styles.checkbox, faceFreeConfirmed && styles.checkboxChecked]}>
                 {faceFreeConfirmed && <Ionicons name="checkmark" size={16} color="#FFF" />}
               </View>
-              <Text style={styles.checkboxLabel}>
-                I confirm this content does not include any faces
-              </Text>
+              <Text style={styles.checkboxLabel}>I confirm no faces are visible in my photos</Text>
             </Pressable>
           </View>
         </ScrollView>

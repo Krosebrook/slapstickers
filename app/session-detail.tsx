@@ -17,6 +17,8 @@ import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import { captureRef } from 'react-native-view-shot';
+import { useQuery } from '@tanstack/react-query';
+import { apiRequest } from '@/lib/query-client';
 import Colors from '@/constants/colors';
 import { useSessions } from '@/lib/session-context';
 import ActionButton from '@/components/ActionButton';
@@ -37,6 +39,36 @@ export default function SessionDetailScreen() {
   const previewRef = useRef<View>(null);
 
   const webTopInset = Platform.OS === 'web' ? 67 : 0;
+
+  const jobsQuery = useQuery({
+    queryKey: ['/api/v1/jobs/session', session?.id],
+    enabled: !!session,
+    refetchInterval: (query) => {
+      const data = query.state.data as any;
+      if (data?.jobs?.some((j: any) => j.status === 'queued' || j.status === 'processing')) {
+        return 2000;
+      }
+      return false;
+    },
+  });
+
+  const handleToggleEphemeral = async () => {
+    if (!session) return;
+    try {
+      if (session.ephemeral) {
+        await apiRequest('POST', `/api/v1/session/${session.id}/save`);
+        updateSession(session.id, { ephemeral: false, savedAt: new Date().toISOString() });
+      } else {
+        await apiRequest('POST', `/api/v1/session/${session.id}/ephemeral`, { delayMs: 1800000 });
+        updateSession(session.id, { ephemeral: true, savedAt: undefined });
+      }
+      if (Platform.OS !== 'web') {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      }
+    } catch (err) {
+      console.error('Toggle ephemeral failed:', err);
+    }
+  };
 
   const handleSaveToGallery = async () => {
     if (!session) return;
@@ -269,6 +301,74 @@ export default function SessionDetailScreen() {
             style={{ flex: 1 }}
           />
         </View>
+
+        <View style={styles.sessionPersistence}>
+          <View style={styles.persistenceRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.persistenceTitle}>
+                {session.ephemeral ? 'Auto-delete enabled' : 'Session saved'}
+              </Text>
+              <Text style={styles.persistenceDesc}>
+                {session.ephemeral 
+                  ? 'Files will be deleted 30 min after export' 
+                  : 'Session files are preserved'}
+              </Text>
+            </View>
+            <Pressable
+              onPress={handleToggleEphemeral}
+              style={[styles.saveToggle, !session.ephemeral && styles.saveToggleActive]}
+            >
+              <Ionicons 
+                name={session.ephemeral ? 'cloud-offline-outline' : 'cloud-done'} 
+                size={20} 
+                color={session.ephemeral ? Colors.dark.textSecondary : Colors.dark.tint} 
+              />
+            </Pressable>
+          </View>
+        </View>
+
+        {jobsQuery.data?.jobs?.length > 0 && (
+          <View style={styles.detailSection}>
+            <Text style={styles.sectionTitle}>Processing Jobs</Text>
+            {jobsQuery.data.jobs.map((job: any) => (
+              <View key={job.id} style={styles.jobCard}>
+                <View style={styles.jobHeader}>
+                  <View style={styles.jobTypeBadge}>
+                    <Ionicons 
+                      name={job.type === 'premium_still' ? 'diamond' : 'videocam'} 
+                      size={14} 
+                      color={Colors.dark.tint} 
+                    />
+                    <Text style={styles.jobTypeText}>
+                      {job.type === 'premium_still' ? 'Premium Still' : 'Video Render'}
+                    </Text>
+                  </View>
+                  <View style={[
+                    styles.jobStatusBadge,
+                    { backgroundColor: job.status === 'completed' ? Colors.dark.successSoft : 
+                      job.status === 'failed' ? Colors.dark.dangerSoft : Colors.dark.accentSoft }
+                  ]}>
+                    <Text style={[
+                      styles.jobStatusText,
+                      { color: job.status === 'completed' ? Colors.dark.success :
+                        job.status === 'failed' ? Colors.dark.danger : Colors.dark.tint }
+                    ]}>
+                      {job.status.charAt(0).toUpperCase() + job.status.slice(1)}
+                    </Text>
+                  </View>
+                </View>
+                {(job.status === 'queued' || job.status === 'processing') && (
+                  <View style={styles.progressBar}>
+                    <View style={[styles.progressFill, { width: `${job.progress}%` }]} />
+                  </View>
+                )}
+                {job.error && (
+                  <Text style={styles.jobError}>{job.error}</Text>
+                )}
+              </View>
+            ))}
+          </View>
+        )}
 
         <View style={styles.detailSection}>
           <Text style={styles.sectionTitle}>Placement Details</Text>
@@ -509,5 +609,89 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 20,
     marginTop: 100,
+  },
+  jobCard: {
+    backgroundColor: Colors.dark.surface,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: Colors.dark.border,
+  },
+  jobHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  jobTypeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  jobTypeText: {
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    color: Colors.dark.text,
+  },
+  jobStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  jobStatusText: {
+    fontSize: 11,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  progressBar: {
+    height: 4,
+    backgroundColor: Colors.dark.surfaceElevated,
+    borderRadius: 2,
+    overflow: 'hidden' as const,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: Colors.dark.tint,
+    borderRadius: 2,
+  },
+  jobError: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.dark.danger,
+    marginTop: 6,
+  },
+  sessionPersistence: {
+    marginBottom: 24,
+  },
+  persistenceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.dark.surface,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.dark.border,
+  },
+  persistenceTitle: {
+    fontSize: 14,
+    fontFamily: 'Inter_500Medium',
+    color: Colors.dark.text,
+  },
+  persistenceDesc: {
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.dark.textSecondary,
+    marginTop: 2,
+  },
+  saveToggle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.dark.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saveToggleActive: {
+    backgroundColor: Colors.dark.accentSoft,
   },
 });

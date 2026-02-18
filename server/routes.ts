@@ -8,6 +8,8 @@ import * as cron from "node-cron";
 import {
   placementSuggestRequestSchema,
   designRemixRequestSchema,
+  consentPayloadSchema,
+  placementSchema,
   ALLOWED_DESIGN_TYPES,
   ALLOWED_IMAGE_TYPES,
   ALLOWED_VIDEO_TYPES,
@@ -25,6 +27,10 @@ import {
 import { suggestPlacement, suggestDesignRemix, detectFaceInImage } from "./gemini";
 import { suggestPlacementFallback, suggestDesignRemixFallback } from "./openai-backup";
 import { registerFileRoutes } from "./file-server";
+import { moderateContent, moderateDesign, validateConsent } from "./policy-gate";
+import { stripExif, generateSignedUrl, scheduleEphemeralCleanup, cancelEphemeralCleanup } from "./privacy";
+import { jobQueue } from "./job-queue";
+import type { NewJob } from "./job-queue";
 
 const upload = multer({
   dest: path.join(getUploadDir(), "tmp"),
@@ -58,6 +64,8 @@ const uploadLimiter = rateLimit({
 });
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  jobQueue.startProcessing();
+
   cron.schedule("0 * * * *", () => {
     const cleaned = cleanupOldUploads();
     if (cleaned > 0) {
@@ -73,6 +81,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
       openai: !!process.env.OPENAI_API_KEY,
     });
   });
+
+  app.post(
+    "/api/v1/moderate/content",
+    aiLimiter,
+    async (req: Request, res: Response) => {
+      try {
+        const { imageBase64, consent } = req.body;
+        if (!imageBase64 || typeof imageBase64 !== "string") {
+          return res.status(400).json({ error: "imageBase64 is required" });
+        }
+
+        if (consent) {
+          const consentParsed = consentPayloadSchema.safeParse(consent);
+          if (!consentParsed.success) {
+            return res.status(400).json({ error: "Invalid consent payload", details: consentParsed.error.flatten() });
+          }
+          if (!validateConsent(consentParsed.data)) {
+            return res.status(403).json({
+              error: "Consent validation failed",
+              detail: "All consent fields must be confirmed before processing.",
+              code: "CONSENT_REQUIRED",
+            });
+          }
+        }
+
+        const result = await moderateContent(imageBase64);
+        return res.json(result);
+      } catch (error) {
+        console.error("Moderate content error:", error);
+        return res.status(500).json({ error: "Moderation failed" });
+      }
+    }
+  );
+
+  app.post(
+    "/api/v1/moderate/design",
+    aiLimiter,
+    async (req: Request, res: Response) => {
+      try {
+        const { designBase64 } = req.body;
+        if (!designBase64 || typeof designBase64 !== "string") {
+          return res.status(400).json({ error: "designBase64 is required" });
+        }
+
+        const result = await moderateDesign(designBase64);
+        return res.json(result);
+      } catch (error) {
+        console.error("Moderate design error:", error);
+        return res.status(500).json({ error: "Moderation failed" });
+      }
+    }
+  );
 
   app.post(
     "/api/v1/ai/placement-suggest",
@@ -94,7 +154,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (hasFace) {
             return res.status(400).json({
               error: "Face detected in frame",
-              detail: "Please ensure the video only captures the body area, not the face.",
+              detail: "Please ensure the photo only captures the body area, not the face.",
               code: "FACE_DETECTED",
             });
           }
@@ -202,15 +262,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         fs.renameSync(req.file.path, destPath);
 
+        await stripExif(destPath);
+
+        const signedUrl = generateSignedUrl(destPath);
+
         return res.json({
           sessionId,
           filePath: destPath,
+          signedUrl,
           originalName: req.file.originalname,
           mimeType: req.file.mimetype,
           size: req.file.size,
         });
       } catch (error) {
         console.error("Upload design error:", error);
+        return res.status(500).json({ error: "Upload failed" });
+      }
+    }
+  );
+
+  app.post(
+    "/api/v1/upload/body-image",
+    uploadLimiter,
+    upload.single("file"),
+    async (req: Request, res: Response) => {
+      try {
+        if (!req.file) {
+          return res.status(400).json({ error: "No file provided" });
+        }
+
+        if (!ALLOWED_IMAGE_TYPES.includes(req.file.mimetype as any)) {
+          fs.unlinkSync(req.file.path);
+          return res.status(400).json({ error: `File type ${req.file.mimetype} not allowed for images` });
+        }
+
+        if (req.file.size > MAX_IMAGE_SIZE) {
+          fs.unlinkSync(req.file.path);
+          return res.status(400).json({ error: "Image file exceeds 15MB limit" });
+        }
+
+        const sessionId = (req.body.sessionId as string) || generateSessionId();
+        const sessionDir = getSessionDir(sessionId);
+        const ext = path.extname(req.file.originalname) || '.jpg';
+        const destPath = path.join(sessionDir, `body${ext}`);
+
+        fs.renameSync(req.file.path, destPath);
+
+        await stripExif(destPath);
+
+        const signedUrl = generateSignedUrl(destPath);
+
+        return res.json({
+          sessionId,
+          filePath: destPath,
+          signedUrl,
+          originalName: req.file.originalname,
+          mimeType: req.file.mimetype,
+          size: req.file.size,
+        });
+      } catch (error) {
+        console.error("Upload body image error:", error);
         return res.status(500).json({ error: "Upload failed" });
       }
     }
@@ -233,7 +344,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         if (req.file.size > MAX_VIDEO_SIZE) {
           fs.unlinkSync(req.file.path);
-          return res.status(400).json({ error: "Video file exceeds 50MB limit" });
+          return res.status(500).json({ error: "Video file exceeds 50MB limit" });
         }
 
         const sessionId = (req.body.sessionId as string) || generateSessionId();
@@ -243,9 +354,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         fs.renameSync(req.file.path, destPath);
 
+        const signedUrl = generateSignedUrl(destPath);
+
         return res.json({
           sessionId,
           filePath: destPath,
+          signedUrl,
           originalName: req.file.originalname,
           mimeType: req.file.mimetype,
           size: req.file.size,
@@ -257,6 +371,122 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
+  app.post(
+    "/api/v1/jobs/submit",
+    aiLimiter,
+    async (req: Request, res: Response) => {
+      try {
+        const { type, sessionId, inputData, consent } = req.body;
+
+        if (!type || !sessionId || !inputData) {
+          return res.status(400).json({ error: "type, sessionId, and inputData are required" });
+        }
+
+        if (!['premium_still', 'video_render'].includes(type)) {
+          return res.status(400).json({ error: "type must be 'premium_still' or 'video_render'" });
+        }
+
+        if (consent) {
+          const consentParsed = consentPayloadSchema.safeParse(consent);
+          if (!consentParsed.success || !validateConsent(consentParsed.data)) {
+            return res.status(403).json({
+              error: "Consent required for premium processing",
+              code: "CONSENT_REQUIRED",
+            });
+          }
+        }
+
+        const placementParsed = placementSchema.safeParse(inputData.placement);
+        if (!placementParsed.success) {
+          return res.status(400).json({ error: "Invalid placement data", details: placementParsed.error.flatten() });
+        }
+
+        const newJob: NewJob = {
+          type,
+          sessionId,
+          inputData: {
+            bodyImagePath: inputData.bodyImagePath,
+            designImagePath: inputData.designImagePath,
+            placement: placementParsed.data,
+            bodySegmentationData: inputData.bodySegmentationData,
+            videoPath: inputData.videoPath,
+            previewMode: inputData.previewMode || "fresh",
+          },
+        };
+
+        const jobId = jobQueue.submitJob(newJob);
+        const job = jobQueue.getJob(jobId);
+
+        return res.json(job);
+      } catch (error) {
+        console.error("Job submit error:", error);
+        return res.status(500).json({ error: "Job submission failed" });
+      }
+    }
+  );
+
+  app.get("/api/v1/jobs/:jobId", (req: Request, res: Response) => {
+    try {
+      const { jobId } = req.params;
+      const job = jobQueue.getJob(jobId);
+      if (!job) {
+        return res.status(404).json({ error: "Job not found" });
+      }
+      return res.json(job);
+    } catch (error) {
+      console.error("Job status error:", error);
+      return res.status(500).json({ error: "Failed to get job status" });
+    }
+  });
+
+  app.get("/api/v1/jobs/session/:sessionId", (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const jobs = jobQueue.getSessionJobs(sessionId);
+      return res.json({ jobs });
+    } catch (error) {
+      console.error("Session jobs error:", error);
+      return res.status(500).json({ error: "Failed to get session jobs" });
+    }
+  });
+
+  app.post("/api/v1/jobs/:jobId/cancel", (req: Request, res: Response) => {
+    try {
+      const { jobId } = req.params;
+      const cancelled = jobQueue.cancelJob(jobId);
+      if (!cancelled) {
+        return res.status(400).json({ error: "Job cannot be cancelled (not found or already finished)" });
+      }
+      return res.json({ cancelled: true, jobId });
+    } catch (error) {
+      console.error("Job cancel error:", error);
+      return res.status(500).json({ error: "Failed to cancel job" });
+    }
+  });
+
+  app.post("/api/v1/session/:sessionId/save", (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      cancelEphemeralCleanup(sessionId);
+      return res.json({ saved: true, sessionId });
+    } catch (error) {
+      console.error("Session save error:", error);
+      return res.status(500).json({ error: "Failed to save session" });
+    }
+  });
+
+  app.post("/api/v1/session/:sessionId/ephemeral", (req: Request, res: Response) => {
+    try {
+      const { sessionId } = req.params;
+      const { delayMs } = req.body;
+      scheduleEphemeralCleanup(sessionId, delayMs || 1800000);
+      return res.json({ scheduled: true, sessionId, deleteAfterMs: delayMs || 1800000 });
+    } catch (error) {
+      console.error("Ephemeral schedule error:", error);
+      return res.status(500).json({ error: "Failed to schedule cleanup" });
+    }
+  });
+
   app.delete(
     "/api/v1/session/:sessionId",
     async (req: Request, res: Response) => {
@@ -266,6 +496,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(400).json({ error: "Invalid session ID" });
         }
 
+        cancelEphemeralCleanup(sessionId);
         const deleted = deleteSessionDir(sessionId);
         return res.json({ deleted, sessionId });
       } catch (error) {
@@ -290,6 +521,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         maxVideoSizeMb: 50,
         maxImageSizeMb: 15,
         uploadRetentionHours: 24,
+      },
+      features: {
+        moderation: true,
+        premiumStill: true,
+        videoRender: true,
+        exifStripping: true,
+        signedUrls: true,
+        ephemeralProcessing: true,
       },
     });
   });
