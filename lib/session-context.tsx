@@ -68,6 +68,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       stills: [],
       placement: DEFAULT_PLACEMENT,
       status: 'draft',
+      ephemeral: true,
+      previewMode: 'fresh',
     };
     const updated = [session, ...sessions];
     setSessions(updated);

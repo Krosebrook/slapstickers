@@ -24,6 +24,7 @@ import {
 } from "./storage";
 import { suggestPlacement, suggestDesignRemix, detectFaceInImage } from "./gemini";
 import { suggestPlacementFallback, suggestDesignRemixFallback } from "./openai-backup";
+import { registerFileRoutes } from "./file-server";
 
 const upload = multer({
   dest: path.join(getUploadDir(), "tmp"),
@@ -273,6 +274,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
     }
   );
+
+  registerFileRoutes(app);
 
   app.get("/api/v1/usage", (_req: Request, res: Response) => {
     res.json({

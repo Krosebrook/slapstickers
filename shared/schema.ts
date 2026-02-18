@@ -97,6 +97,13 @@ export interface TattooSession {
   aiSuggestions?: AiPlacementResponse;
   approvalPacket?: ApprovalPacket;
   status: 'draft' | 'editing' | 'exported';
+  consent?: ConsentPayload;
+  moderationResult?: ModerationResult;
+  jobIds?: string[];
+  ephemeral: boolean;
+  savedAt?: string;
+  bodySegmentationData?: string;
+  previewMode: 'fresh' | 'healed';
 }
 
 export const placementSuggestRequestSchema = z.object({
@@ -110,3 +117,44 @@ export const designRemixRequestSchema = z.object({
   bodyFrames: z.array(z.string()).max(2).optional(),
   style: z.string().optional(),
 });
+
+export const moderationFlagSchema = z.object({
+  type: z.enum(['minor_detected', 'hate_symbol', 'self_harm', 'nudity', 'provider_blocked', 'other']),
+  severity: z.enum(['low', 'medium', 'high', 'critical']),
+  description: z.string(),
+});
+
+export type ModerationFlag = z.infer<typeof moderationFlagSchema>;
+
+export const moderationResultSchema = z.object({
+  approved: z.boolean(),
+  flags: z.array(moderationFlagSchema),
+  confidence: z.number().min(0).max(1),
+  provider: z.enum(['gemini', 'openai', 'local']),
+});
+
+export type ModerationResult = z.infer<typeof moderationResultSchema>;
+
+export const consentPayloadSchema = z.object({
+  faceFreeConfirmed: z.boolean(),
+  ageVerified: z.boolean(),
+  contentConsent: z.boolean(),
+  timestamp: z.string(),
+});
+
+export type ConsentPayload = z.infer<typeof consentPayloadSchema>;
+
+export const jobStatusSchema = z.object({
+  id: z.string(),
+  type: z.enum(['premium_still', 'video_render']),
+  status: z.enum(['queued', 'processing', 'completed', 'failed', 'cancelled']),
+  progress: z.number().min(0).max(100),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  sessionId: z.string(),
+  resultUrl: z.string().optional(),
+  error: z.string().optional(),
+  estimatedTimeMs: z.number().optional(),
+});
+
+export type JobStatus = z.infer<typeof jobStatusSchema>;
