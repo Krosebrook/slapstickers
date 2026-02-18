@@ -89,6 +89,7 @@ export interface TattooSession {
   updatedAt: string;
   designUri: string;
   designName: string;
+  bodyImageUri?: string;
   videoUri?: string;
   stills: string[];
   placement: Placement;

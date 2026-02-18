@@ -8,7 +8,7 @@ const SESSIONS_KEY = '@tattoo_shop_sessions';
 interface SessionContextValue {
   sessions: TattooSession[];
   isLoading: boolean;
-  createSession: (name: string, designUri: string, designName: string) => Promise<TattooSession>;
+  createSession: (name: string, designUri: string, designName: string, bodyImageUri?: string) => Promise<TattooSession>;
   updateSession: (id: string, updates: Partial<TattooSession>) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
   getSession: (id: string) => TattooSession | undefined;
@@ -55,7 +55,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const createSession = useCallback(async (name: string, designUri: string, designName: string): Promise<TattooSession> => {
+  const createSession = useCallback(async (name: string, designUri: string, designName: string, bodyImageUri?: string): Promise<TattooSession> => {
     const now = new Date().toISOString();
     const session: TattooSession = {
       id: Crypto.randomUUID(),
@@ -64,6 +64,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       updatedAt: now,
       designUri,
       designName,
+      bodyImageUri,
       stills: [],
       placement: DEFAULT_PLACEMENT,
       status: 'draft',

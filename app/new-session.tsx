@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -26,7 +26,7 @@ export default function NewSessionScreen() {
   const [sessionName, setSessionName] = useState('');
   const [designUri, setDesignUri] = useState('');
   const [designName, setDesignName] = useState('');
-  const [videoUri, setVideoUri] = useState('');
+  const [bodyImageUri, setBodyImageUri] = useState('');
   const [faceFreeConfirmed, setFaceFreeConfirmed] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
 
@@ -53,43 +53,43 @@ export default function NewSessionScreen() {
     }
   };
 
-  const pickVideo = async () => {
+  const pickBodyImage = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['videos'],
+        mediaTypes: ['images'],
         allowsEditing: true,
-        videoMaxDuration: 8,
-        quality: 0.8,
+        quality: 0.9,
+        aspect: [3, 4],
       });
 
       if (!result.canceled && result.assets[0]) {
-        setVideoUri(result.assets[0].uri);
+        setBodyImageUri(result.assets[0].uri);
       }
     } catch (err) {
-      console.error('Failed to pick video:', err);
+      console.error('Failed to pick body image:', err);
     }
   };
 
-  const captureVideo = async () => {
+  const captureBodyImage = async () => {
     try {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Camera access is required to capture video.');
+        Alert.alert('Permission needed', 'Camera access is required to take a photo.');
         return;
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ['videos'],
+        mediaTypes: ['images'],
         allowsEditing: true,
-        videoMaxDuration: 8,
-        quality: 0.8,
+        quality: 0.9,
+        aspect: [3, 4],
       });
 
       if (!result.canceled && result.assets[0]) {
-        setVideoUri(result.assets[0].uri);
+        setBodyImageUri(result.assets[0].uri);
       }
     } catch (err) {
-      console.error('Failed to capture video:', err);
+      console.error('Failed to capture body image:', err);
     }
   };
 
@@ -98,14 +98,16 @@ export default function NewSessionScreen() {
 
     setIsCreating(true);
     try {
-      const session = await createSession(sessionName.trim(), designUri, designName);
-      if (videoUri) {
-        const { updateSession } = require('@/lib/session-context');
-      }
+      const session = await createSession(
+        sessionName.trim(),
+        designUri,
+        designName,
+        bodyImageUri || undefined,
+      );
       if (Platform.OS !== 'web') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
-      router.replace({ pathname: '/editor', params: { id: session.id, videoUri, faceFree: faceFreeConfirmed ? '1' : '0' } });
+      router.replace({ pathname: '/editor', params: { id: session.id } });
     } catch (err) {
       console.error('Create session failed:', err);
       Alert.alert('Error', 'Failed to create session.');
@@ -149,6 +151,40 @@ export default function NewSessionScreen() {
           </View>
 
           <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Body Photo</Text>
+            <Text style={styles.sectionDesc}>
+              Take or import a photo of the body area where you want the tattoo. Keep face out of frame.
+            </Text>
+
+            {bodyImageUri ? (
+              <View style={styles.designPreview}>
+                <Image source={{ uri: bodyImageUri }} style={styles.bodyImage} contentFit="cover" />
+                <View style={styles.changeRow}>
+                  <Pressable onPress={pickBodyImage} style={styles.changeBtn}>
+                    <Ionicons name="swap-horizontal" size={16} color={Colors.dark.tint} />
+                    <Text style={styles.changeBtnText}>Change</Text>
+                  </Pressable>
+                  <Pressable onPress={() => setBodyImageUri('')} style={styles.changeBtn}>
+                    <Ionicons name="close-circle" size={16} color={Colors.dark.danger} />
+                    <Text style={[styles.changeBtnText, { color: Colors.dark.danger }]}>Remove</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <View style={styles.videoButtons}>
+                <Pressable onPress={captureBodyImage} style={styles.videoOption}>
+                  <Ionicons name="camera-outline" size={28} color={Colors.dark.tint} />
+                  <Text style={styles.videoOptionText}>Take Photo</Text>
+                </Pressable>
+                <Pressable onPress={pickBodyImage} style={styles.videoOption}>
+                  <Ionicons name="images-outline" size={28} color={Colors.dark.tint} />
+                  <Text style={styles.videoOptionText}>From Gallery</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+
+          <View style={styles.section}>
             <Text style={styles.sectionTitle}>Tattoo Design</Text>
             <Text style={styles.sectionDesc}>Upload your design (PNG, SVG, JPG, max 10MB)</Text>
 
@@ -165,34 +201,6 @@ export default function NewSessionScreen() {
                 <MaterialCommunityIcons name="image-plus" size={36} color={Colors.dark.textTertiary} />
                 <Text style={styles.uploadText}>Tap to upload design</Text>
               </Pressable>
-            )}
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Body Video (Optional)</Text>
-            <Text style={styles.sectionDesc}>5-8 second video of the body area. Keep face out of frame.</Text>
-
-            {videoUri ? (
-              <View style={styles.videoPreviewRow}>
-                <View style={styles.videoIndicator}>
-                  <Ionicons name="videocam" size={24} color={Colors.dark.success} />
-                  <Text style={styles.videoReadyText}>Video ready</Text>
-                </View>
-                <Pressable onPress={() => setVideoUri('')} style={styles.removeVideoBtn}>
-                  <Ionicons name="close-circle" size={20} color={Colors.dark.danger} />
-                </Pressable>
-              </View>
-            ) : (
-              <View style={styles.videoButtons}>
-                <Pressable onPress={captureVideo} style={styles.videoOption}>
-                  <Ionicons name="videocam-outline" size={28} color={Colors.dark.tint} />
-                  <Text style={styles.videoOptionText}>Record</Text>
-                </Pressable>
-                <Pressable onPress={pickVideo} style={styles.videoOption}>
-                  <Ionicons name="folder-open-outline" size={28} color={Colors.dark.tint} />
-                  <Text style={styles.videoOptionText}>Import</Text>
-                </Pressable>
-              </View>
             )}
           </View>
 
@@ -313,8 +321,18 @@ const styles = StyleSheet.create({
   },
   designImage: {
     width: '100%',
-    height: 200,
+    height: 180,
     backgroundColor: Colors.dark.surfaceElevated,
+  },
+  bodyImage: {
+    width: '100%',
+    height: 240,
+    backgroundColor: Colors.dark.surfaceElevated,
+  },
+  changeRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 20,
   },
   changeBtn: {
     flexDirection: 'row',
@@ -347,31 +365,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: 'Inter_500Medium',
     color: Colors.dark.textSecondary,
-  },
-  videoPreviewRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: Colors.dark.successSoft,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  videoIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  videoReadyText: {
-    fontSize: 14,
-    fontFamily: 'Inter_500Medium',
-    color: Colors.dark.success,
-  },
-  removeVideoBtn: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   checkboxRow: {
     flexDirection: 'row',
