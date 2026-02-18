@@ -22,7 +22,7 @@ import ActionButton from '@/components/ActionButton';
 
 export default function NewSessionScreen() {
   const insets = useSafeAreaInsets();
-  const { createSession, updateSession } = useSessions();
+  const { createSession } = useSessions();
   const [sessionName, setSessionName] = useState('');
   const [designUri, setDesignUri] = useState('');
   const [designName, setDesignName] = useState('');
@@ -113,19 +113,19 @@ export default function NewSessionScreen() {
 
     setIsCreating(true);
     try {
-      const session = await createSession(
-        sessionName.trim(),
-        designUri,
-        designName,
-        bodyImageUri || undefined,
-      );
       const consent = {
         faceFreeConfirmed,
         ageVerified,
         contentConsent,
         timestamp: new Date().toISOString(),
       };
-      await updateSession(session.id, { consent });
+      const session = await createSession(
+        sessionName.trim(),
+        designUri,
+        designName,
+        bodyImageUri || undefined,
+        { consent },
+      );
       if (Platform.OS !== 'web') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       }
