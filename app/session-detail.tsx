@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,6 @@ import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
 import { captureRef } from 'react-native-view-shot';
 import Colors from '@/constants/colors';
 import { useSessions } from '@/lib/session-context';
@@ -24,7 +23,8 @@ import ActionButton from '@/components/ActionButton';
 import type { ApprovalPacket } from '@shared/schema';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const EXPORT_SIZE = SCREEN_WIDTH - 48;
+const EXPORT_WIDTH = SCREEN_WIDTH - 48;
+const EXPORT_HEIGHT = EXPORT_WIDTH * 1.33;
 
 export default function SessionDetailScreen() {
   const insets = useSafeAreaInsets();
@@ -162,6 +162,8 @@ export default function SessionDetailScreen() {
     );
   }
 
+  const hasBodyImage = !!session.bodyImageUri;
+
   return (
     <View style={[styles.container, { paddingTop: insets.top + webTopInset }]}>
       <View style={styles.header}>
@@ -183,8 +185,16 @@ export default function SessionDetailScreen() {
           <View
             ref={previewRef}
             collapsable={false}
-            style={[styles.previewCanvas, { width: EXPORT_SIZE, height: EXPORT_SIZE }]}
+            style={[styles.previewCanvas, { width: EXPORT_WIDTH, height: EXPORT_HEIGHT }]}
           >
+            {hasBodyImage && (
+              <Image
+                source={{ uri: session.bodyImageUri }}
+                style={StyleSheet.absoluteFill}
+                contentFit="cover"
+              />
+            )}
+
             <View style={styles.previewBg}>
               <Image
                 source={{ uri: session.designUri }}
@@ -193,8 +203,8 @@ export default function SessionDetailScreen() {
                   {
                     opacity: session.placement.opacity,
                     transform: [
-                      { translateX: (session.placement.anchorX - 0.5) * EXPORT_SIZE },
-                      { translateY: (session.placement.anchorY - 0.5) * EXPORT_SIZE },
+                      { translateX: (session.placement.anchorX - 0.5) * EXPORT_WIDTH },
+                      { translateY: (session.placement.anchorY - 0.5) * EXPORT_HEIGHT },
                       { scale: session.placement.scale },
                       { rotate: `${session.placement.rotationDeg}deg` },
                     ],
@@ -204,6 +214,15 @@ export default function SessionDetailScreen() {
               />
             </View>
           </View>
+
+          {!hasBodyImage && (
+            <View style={styles.noBodyWarning}>
+              <Ionicons name="information-circle-outline" size={16} color={Colors.dark.tint} />
+              <Text style={styles.noBodyWarningText}>
+                No body photo added. Edit this session to add one for a realistic preview.
+              </Text>
+            </View>
+          )}
 
           <View style={styles.statusRow}>
             <View style={[styles.statusBadge, { backgroundColor: session.status === 'exported' ? Colors.dark.successSoft : Colors.dark.accentSoft }]}>
@@ -372,8 +391,8 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   previewCanvas: {
-    backgroundColor: Colors.dark.surface,
-    borderRadius: 20,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: Colors.dark.border,
@@ -384,8 +403,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   previewTattoo: {
-    width: '50%',
-    height: '50%',
+    width: '60%',
+    height: '60%',
+  },
+  noBodyWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingHorizontal: 4,
+  },
+  noBodyWarningText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.dark.tintLight,
+    lineHeight: 17,
   },
   statusRow: {
     flexDirection: 'row',

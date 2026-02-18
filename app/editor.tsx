@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,13 +8,13 @@ import {
   Alert,
   ScrollView,
   Dimensions,
-  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useAnimatedStyle,
@@ -28,7 +28,8 @@ import EditorSlider from '@/components/EditorSlider';
 import { apiRequest } from '@/lib/query-client';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const CANVAS_SIZE = SCREEN_WIDTH - 40;
+const CANVAS_WIDTH = SCREEN_WIDTH - 32;
+const CANVAS_HEIGHT = CANVAS_WIDTH * 1.33;
 
 type BlendMode = 'normal' | 'multiply' | 'overlay' | 'screen';
 
@@ -41,7 +42,7 @@ const BLEND_MODES: { value: BlendMode; label: string }[] = [
 
 export default function EditorScreen() {
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ id: string; videoUri?: string; faceFree?: string }>();
+  const params = useLocalSearchParams<{ id: string }>();
   const { getSession, updateSession } = useSessions();
   const session = getSession(params.id || '');
 
@@ -53,6 +54,7 @@ export default function EditorScreen() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiNotes, setAiNotes] = useState('');
   const [showControls, setShowControls] = useState(true);
+  const [bodyImageUri, setBodyImageUri] = useState(session?.bodyImageUri || '');
 
   const webTopInset = Platform.OS === 'web' ? 67 : 0;
 
@@ -86,7 +88,7 @@ export default function EditorScreen() {
       savedScale.value = animScale.value;
     })
     .onUpdate((e) => {
-      animScale.value = Math.max(0.3, Math.min(5, savedScale.value * e.scale));
+      animScale.value = Math.max(0.2, Math.min(5, savedScale.value * e.scale));
     })
     .onEnd(() => {
       setScale(animScale.value);
@@ -115,6 +117,49 @@ export default function EditorScreen() {
     opacity: opacity,
   }));
 
+  const pickBodyImage = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.9,
+        aspect: [3, 4],
+      });
+      if (!result.canceled && result.assets[0]) {
+        setBodyImageUri(result.assets[0].uri);
+        if (session) {
+          updateSession(session.id, { bodyImageUri: result.assets[0].uri });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to pick body image:', err);
+    }
+  };
+
+  const captureBodyImage = async () => {
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Camera access is required.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.9,
+        aspect: [3, 4],
+      });
+      if (!result.canceled && result.assets[0]) {
+        setBodyImageUri(result.assets[0].uri);
+        if (session) {
+          updateSession(session.id, { bodyImageUri: result.assets[0].uri });
+        }
+      }
+    } catch (err) {
+      console.error('Failed to capture body image:', err);
+    }
+  };
+
   const handleAiSuggest = async () => {
     if (!session) return;
     setAiLoading(true);
@@ -133,8 +178,8 @@ export default function EditorScreen() {
           setRotation(sug.rotationDeg);
           animScale.value = withSpring(sug.scale);
           animRotation.value = withSpring(sug.rotationDeg);
-          translateX.value = withSpring((sug.anchorX - 0.5) * CANVAS_SIZE);
-          translateY.value = withSpring((sug.anchorY - 0.5) * CANVAS_SIZE);
+          translateX.value = withSpring((sug.anchorX - 0.5) * CANVAS_WIDTH);
+          translateY.value = withSpring((sug.anchorY - 0.5) * CANVAS_HEIGHT);
         }
         if (Platform.OS !== 'web') {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -180,8 +225,8 @@ export default function EditorScreen() {
 
   const handleExport = () => {
     if (!session) return;
-    const anchorX = 0.5 + translateX.value / CANVAS_SIZE;
-    const anchorY = 0.5 + translateY.value / CANVAS_SIZE;
+    const anchorX = 0.5 + translateX.value / CANVAS_WIDTH;
+    const anchorY = 0.5 + translateY.value / CANVAS_HEIGHT;
 
     updateSession(session.id, {
       placement: {
@@ -193,6 +238,7 @@ export default function EditorScreen() {
         blendMode,
         warpIntensity,
       },
+      bodyImageUri: bodyImageUri || undefined,
       aiNotes: aiNotes || undefined,
       status: 'editing',
     });
@@ -230,11 +276,37 @@ export default function EditorScreen() {
       </View>
 
       <View style={styles.canvasContainer}>
-        <View style={[styles.canvas, { width: CANVAS_SIZE, height: CANVAS_SIZE }]}>
-          <View style={styles.canvasGrid}>
-            <View style={styles.gridLineH} />
-            <View style={styles.gridLineV} />
-          </View>
+        <View style={[styles.canvas, { width: CANVAS_WIDTH, height: CANVAS_HEIGHT }]}>
+          {bodyImageUri ? (
+            <Image
+              source={{ uri: bodyImageUri }}
+              style={StyleSheet.absoluteFill}
+              contentFit="cover"
+            />
+          ) : (
+            <View style={styles.noBodyPlaceholder}>
+              <Ionicons name="body-outline" size={40} color={Colors.dark.textTertiary} />
+              <Text style={styles.noBodyText}>Add a body photo</Text>
+              <View style={styles.bodyBtnRow}>
+                <Pressable onPress={captureBodyImage} style={styles.bodyMiniBtn}>
+                  <Ionicons name="camera-outline" size={18} color={Colors.dark.tint} />
+                </Pressable>
+                <Pressable onPress={pickBodyImage} style={styles.bodyMiniBtn}>
+                  <Ionicons name="images-outline" size={18} color={Colors.dark.tint} />
+                </Pressable>
+              </View>
+            </View>
+          )}
+
+          {bodyImageUri && (
+            <Pressable
+              style={styles.changeBodyBtn}
+              onPress={pickBodyImage}
+              hitSlop={8}
+            >
+              <Ionicons name="camera-reverse-outline" size={16} color="#FFF" />
+            </Pressable>
+          )}
 
           <GestureDetector gesture={composed}>
             <Animated.View style={[styles.tattooOverlay, tattooStyle]}>
@@ -256,7 +328,7 @@ export default function EditorScreen() {
         >
           <View style={styles.aiSection}>
             <ActionButton
-              title="Suggest Placement"
+              title="AI Placement"
               icon="sparkles-outline"
               onPress={handleAiSuggest}
               variant="secondary"
@@ -265,7 +337,7 @@ export default function EditorScreen() {
               style={{ flex: 1 }}
             />
             <ActionButton
-              title="Improve Realism"
+              title="AI Realism"
               icon="color-wand-outline"
               onPress={handleAiRemix}
               variant="secondary"
@@ -295,7 +367,7 @@ export default function EditorScreen() {
           <EditorSlider
             label="Scale"
             value={scale}
-            min={0.3}
+            min={0.2}
             max={3.0}
             step={0.1}
             onChange={(v) => {
@@ -378,7 +450,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: 8,
   },
   backBtn: {
     width: 40,
@@ -402,38 +474,60 @@ const styles = StyleSheet.create({
   },
   canvasContainer: {
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 4,
   },
   canvas: {
-    backgroundColor: Colors.dark.surface,
-    borderRadius: 20,
+    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: Colors.dark.border,
   },
-  canvasGrid: {
+  noBodyPlaceholder: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
+    gap: 8,
   },
-  gridLineH: {
-    position: 'absolute',
-    width: '100%',
-    height: 1,
-    backgroundColor: 'rgba(212, 168, 83, 0.1)',
+  noBodyText: {
+    fontSize: 13,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.dark.textTertiary,
   },
-  gridLineV: {
+  bodyBtnRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 4,
+  },
+  bodyMiniBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.dark.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.dark.border,
+  },
+  changeBodyBtn: {
     position: 'absolute',
-    width: 1,
-    height: '100%',
-    backgroundColor: 'rgba(212, 168, 83, 0.1)',
+    top: 10,
+    right: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
   },
   tattooOverlay: {
     position: 'absolute',
-    top: '25%',
-    left: '25%',
-    width: '50%',
-    height: '50%',
+    top: '20%',
+    left: '20%',
+    width: '60%',
+    height: '60%',
   },
   tattooImage: {
     width: '100%',
