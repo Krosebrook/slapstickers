@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Alert,
   ScrollView,
   KeyboardAvoidingView,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -19,6 +20,7 @@ import { Image } from 'expo-image';
 import Colors from '@/constants/colors';
 import { useSessions } from '@/lib/session-context';
 import ActionButton from '@/components/ActionButton';
+import { getApiUrl } from '@/lib/query-client';
 
 export default function NewSessionScreen() {
   const insets = useSafeAreaInsets();
@@ -26,11 +28,18 @@ export default function NewSessionScreen() {
   const [sessionName, setSessionName] = useState('');
   const [designUri, setDesignUri] = useState('');
   const [designName, setDesignName] = useState('');
+  const [processedDesignUri, setProcessedDesignUri] = useState('');
   const [bodyImageUri, setBodyImageUri] = useState('');
   const [faceFreeConfirmed, setFaceFreeConfirmed] = useState(false);
   const [ageVerified, setAgeVerified] = useState(false);
   const [contentConsent, setContentConsent] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [bgRemoveEnabled, setBgRemoveEnabled] = useState(true);
+  const [bgTolerance, setBgTolerance] = useState(30);
+  const [isProcessingBg, setIsProcessingBg] = useState(false);
+  const [showOriginal, setShowOriginal] = useState(false);
+  const [bgWasRemoved, setBgWasRemoved] = useState(false);
+  const [serverSessionId, setServerSessionId] = useState('');
 
   const toggleFaceFree = () => {
     setFaceFreeConfirmed(!faceFreeConfirmed);
@@ -47,6 +56,59 @@ export default function NewSessionScreen() {
 
   const webTopInset = Platform.OS === 'web' ? 67 : 0;
 
+  const uploadAndProcessDesign = useCallback(async (uri: string, fileName: string, removeBg: boolean, tolerance: number) => {
+    setIsProcessingBg(true);
+    try {
+      const baseUrl = getApiUrl();
+      const formData = new FormData();
+
+      const fileExt = fileName.split('.').pop()?.toLowerCase() || 'png';
+      const mimeType = fileExt === 'svg' ? 'image/svg+xml' : fileExt === 'jpg' || fileExt === 'jpeg' ? 'image/jpeg' : 'image/png';
+
+      formData.append('file', {
+        uri,
+        type: mimeType,
+        name: fileName,
+      } as any);
+      formData.append('removeBg', removeBg ? 'true' : 'false');
+      formData.append('tolerance', tolerance.toString());
+
+      const response = await fetch(`${baseUrl}api/v1/upload/design`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.signedUrl) {
+        const processedUrl = `${baseUrl}${data.signedUrl.startsWith('/') ? data.signedUrl.slice(1) : data.signedUrl}`;
+        setProcessedDesignUri(processedUrl);
+        setBgWasRemoved(data.bgRemoved || false);
+      }
+
+      if (data.sessionId) {
+        setServerSessionId(data.sessionId);
+      }
+
+      return data;
+    } catch (err) {
+      console.error('Upload/process design failed:', err);
+      setProcessedDesignUri('');
+      setBgWasRemoved(false);
+    } finally {
+      setIsProcessingBg(false);
+    }
+  }, []);
+
+  const reprocessBackground = useCallback(async (tolerance: number) => {
+    if (!designUri || !designName) return;
+    await uploadAndProcessDesign(designUri, designName, true, tolerance);
+  }, [designUri, designName, uploadAndProcessDesign]);
+
   const pickDesign = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -56,11 +118,20 @@ export default function NewSessionScreen() {
       });
 
       if (!result.canceled && result.assets[0]) {
-        setDesignUri(result.assets[0].uri);
+        const uri = result.assets[0].uri;
         const fileName = result.assets[0].fileName || 'design.png';
+        setDesignUri(uri);
         setDesignName(fileName);
+        setProcessedDesignUri('');
+        setBgWasRemoved(false);
         if (!sessionName) {
           setSessionName(fileName.replace(/\.[^.]+$/, ''));
+        }
+
+        if (bgRemoveEnabled) {
+          await uploadAndProcessDesign(uri, fileName, true, bgTolerance);
+        } else {
+          await uploadAndProcessDesign(uri, fileName, false, bgTolerance);
         }
       }
     } catch (err) {
@@ -119,12 +190,17 @@ export default function NewSessionScreen() {
         contentConsent,
         timestamp: new Date().toISOString(),
       };
+      const finalDesignUri = processedDesignUri || designUri;
       const session = await createSession(
         sessionName.trim(),
-        designUri,
+        finalDesignUri,
         designName,
         bodyImageUri || undefined,
-        { consent },
+        {
+          consent,
+          originalDesignUri: designUri,
+          bgRemovalTolerance: bgTolerance,
+        },
       );
       if (Platform.OS !== 'web') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -139,6 +215,8 @@ export default function NewSessionScreen() {
   };
 
   const canCreate = designUri && sessionName.trim() && faceFreeConfirmed && ageVerified && contentConsent;
+
+  const displayedDesignUri = showOriginal ? designUri : (processedDesignUri || designUri);
 
   return (
     <KeyboardAvoidingView
@@ -194,11 +272,11 @@ export default function NewSessionScreen() {
               </View>
             ) : (
               <View style={styles.videoButtons}>
-                <Pressable onPress={captureBodyImage} style={styles.videoOption}>
+                <Pressable onPress={captureBodyImage} style={styles.videoOption} testID="capture-body-btn">
                   <Ionicons name="camera-outline" size={28} color={Colors.dark.tint} />
                   <Text style={styles.videoOptionText}>Take Photo</Text>
                 </Pressable>
-                <Pressable onPress={pickBodyImage} style={styles.videoOption}>
+                <Pressable onPress={pickBodyImage} style={styles.videoOption} testID="pick-body-btn">
                   <Ionicons name="images-outline" size={28} color={Colors.dark.tint} />
                   <Text style={styles.videoOptionText}>From Gallery</Text>
                 </Pressable>
@@ -212,14 +290,124 @@ export default function NewSessionScreen() {
 
             {designUri ? (
               <View style={styles.designPreview}>
-                <Image source={{ uri: designUri }} style={styles.designImage} contentFit="contain" />
-                <Pressable onPress={pickDesign} style={styles.changeBtn}>
-                  <Ionicons name="swap-horizontal" size={16} color={Colors.dark.tint} />
-                  <Text style={styles.changeBtnText}>Change</Text>
-                </Pressable>
+                <View style={styles.designImageContainer}>
+                  {!showOriginal && bgWasRemoved && (
+                    <View style={styles.checkerboard}>
+                      {Array.from({ length: 20 }).map((_, row) => (
+                        <View key={row} style={styles.checkerRow}>
+                          {Array.from({ length: 20 }).map((_, col) => (
+                            <View
+                              key={col}
+                              style={[
+                                styles.checkerCell,
+                                (row + col) % 2 === 0
+                                  ? styles.checkerLight
+                                  : styles.checkerDark,
+                              ]}
+                            />
+                          ))}
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                  {isProcessingBg && (
+                    <View style={styles.processingOverlay}>
+                      <ActivityIndicator size="small" color={Colors.dark.tint} />
+                      <Text style={styles.processingText}>Removing background...</Text>
+                    </View>
+                  )}
+                  <Image
+                    source={{ uri: displayedDesignUri }}
+                    style={styles.designImage}
+                    contentFit="contain"
+                  />
+                </View>
+
+                <View style={styles.designActions}>
+                  {bgWasRemoved && (
+                    <Pressable
+                      onPress={() => {
+                        setShowOriginal(!showOriginal);
+                        if (Platform.OS !== 'web') Haptics.selectionAsync();
+                      }}
+                      style={styles.toggleOriginalBtn}
+                    >
+                      <Ionicons
+                        name={showOriginal ? 'eye-outline' : 'eye-off-outline'}
+                        size={14}
+                        color={Colors.dark.tint}
+                      />
+                      <Text style={styles.toggleOriginalText}>
+                        {showOriginal ? 'Show Processed' : 'Show Original'}
+                      </Text>
+                    </Pressable>
+                  )}
+                  <Pressable onPress={pickDesign} style={styles.changeBtn}>
+                    <Ionicons name="swap-horizontal" size={16} color={Colors.dark.tint} />
+                    <Text style={styles.changeBtnText}>Change</Text>
+                  </Pressable>
+                </View>
+
+                <View style={styles.bgRemovalControls}>
+                  <Pressable
+                    onPress={() => {
+                      const next = !bgRemoveEnabled;
+                      setBgRemoveEnabled(next);
+                      if (Platform.OS !== 'web') Haptics.selectionAsync();
+                      if (designUri && designName) {
+                        uploadAndProcessDesign(designUri, designName, next, bgTolerance);
+                      }
+                    }}
+                    style={styles.bgToggleRow}
+                  >
+                    <View style={[styles.checkbox, bgRemoveEnabled && styles.checkboxChecked]}>
+                      {bgRemoveEnabled && <Ionicons name="checkmark" size={14} color="#FFF" />}
+                    </View>
+                    <Text style={styles.bgToggleLabel}>Auto-remove background</Text>
+                  </Pressable>
+
+                  {bgRemoveEnabled && (
+                    <View style={styles.toleranceSection}>
+                      <View style={styles.toleranceHeader}>
+                        <Text style={styles.toleranceLabel}>Tolerance</Text>
+                        <Text style={styles.toleranceValue}>{bgTolerance}%</Text>
+                      </View>
+                      <View style={styles.toleranceSlider}>
+                        <Pressable
+                          onPress={() => {
+                            const newVal = Math.max(5, bgTolerance - 5);
+                            setBgTolerance(newVal);
+                            reprocessBackground(newVal);
+                          }}
+                          style={styles.toleranceBtn}
+                        >
+                          <Ionicons name="remove" size={16} color={Colors.dark.text} />
+                        </Pressable>
+                        <View style={styles.toleranceTrack}>
+                          <View
+                            style={[styles.toleranceFill, { width: `${bgTolerance}%` }]}
+                          />
+                        </View>
+                        <Pressable
+                          onPress={() => {
+                            const newVal = Math.min(100, bgTolerance + 5);
+                            setBgTolerance(newVal);
+                            reprocessBackground(newVal);
+                          }}
+                          style={styles.toleranceBtn}
+                        >
+                          <Ionicons name="add" size={16} color={Colors.dark.text} />
+                        </Pressable>
+                      </View>
+                      <Text style={styles.toleranceHint}>
+                        Lower = more precise, Higher = removes more similar colors
+                      </Text>
+                    </View>
+                  )}
+                </View>
               </View>
             ) : (
-              <Pressable onPress={pickDesign} style={styles.uploadArea}>
+              <Pressable onPress={pickDesign} style={styles.uploadArea} testID="upload-design-btn">
                 <MaterialCommunityIcons name="image-plus" size={36} color={Colors.dark.textTertiary} />
                 <Text style={styles.uploadText}>Tap to upload design</Text>
               </Pressable>
@@ -230,21 +418,21 @@ export default function NewSessionScreen() {
             <Text style={styles.sectionTitle}>Safety & Consent</Text>
             <Text style={styles.sectionDesc}>Required before processing</Text>
 
-            <Pressable onPress={toggleAge} style={styles.checkboxRow}>
+            <Pressable onPress={toggleAge} style={styles.checkboxRow} testID="age-checkbox">
               <View style={[styles.checkbox, ageVerified && styles.checkboxChecked]}>
                 {ageVerified && <Ionicons name="checkmark" size={16} color="#FFF" />}
               </View>
               <Text style={styles.checkboxLabel}>I confirm I am 18 years or older</Text>
             </Pressable>
 
-            <Pressable onPress={toggleConsent} style={[styles.checkboxRow, { marginTop: 10 }]}>
+            <Pressable onPress={toggleConsent} style={[styles.checkboxRow, { marginTop: 10 }]} testID="consent-checkbox">
               <View style={[styles.checkbox, contentConsent && styles.checkboxChecked]}>
                 {contentConsent && <Ionicons name="checkmark" size={16} color="#FFF" />}
               </View>
               <Text style={styles.checkboxLabel}>I consent to processing my media for tattoo preview</Text>
             </Pressable>
 
-            <Pressable onPress={toggleFaceFree} style={[styles.checkboxRow, { marginTop: 10 }]}>
+            <Pressable onPress={toggleFaceFree} style={[styles.checkboxRow, { marginTop: 10 }]} testID="facefree-checkbox">
               <View style={[styles.checkbox, faceFreeConfirmed && styles.checkboxChecked]}>
                 {faceFreeConfirmed && <Ionicons name="checkmark" size={16} color="#FFF" />}
               </View>
@@ -350,15 +538,68 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.dark.border,
   },
+  designImageContainer: {
+    width: '100%',
+    height: 200,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  checkerboard: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'column',
+  },
+  checkerRow: {
+    flexDirection: 'row',
+    flex: 1,
+  },
+  checkerCell: {
+    flex: 1,
+  },
+  checkerLight: {
+    backgroundColor: '#3A3A3A',
+  },
+  checkerDark: {
+    backgroundColor: '#2A2A2A',
+  },
+  processingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(13, 13, 13, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+    gap: 8,
+  },
+  processingText: {
+    fontSize: 12,
+    fontFamily: 'Inter_500Medium',
+    color: Colors.dark.tint,
+  },
   designImage: {
     width: '100%',
-    height: 180,
-    backgroundColor: Colors.dark.surfaceElevated,
+    height: 200,
   },
   bodyImage: {
     width: '100%',
     height: 240,
     backgroundColor: Colors.dark.surfaceElevated,
+  },
+  designActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 16,
+    paddingVertical: 6,
+  },
+  toggleOriginalBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  toggleOriginalText: {
+    fontSize: 12,
+    fontFamily: 'Inter_500Medium',
+    color: Colors.dark.tint,
   },
   changeRow: {
     flexDirection: 'row',
@@ -376,6 +617,78 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: 'Inter_500Medium',
     color: Colors.dark.tint,
+  },
+  bgRemovalControls: {
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    borderTopWidth: 1,
+    borderTopColor: Colors.dark.border,
+    marginTop: 2,
+  },
+  bgToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingTop: 12,
+  },
+  bgToggleLabel: {
+    fontSize: 13,
+    fontFamily: 'Inter_500Medium',
+    color: Colors.dark.textSecondary,
+  },
+  toleranceSection: {
+    marginTop: 12,
+  },
+  toleranceHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  toleranceLabel: {
+    fontSize: 11,
+    fontFamily: 'Inter_500Medium',
+    color: Colors.dark.textTertiary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  toleranceValue: {
+    fontSize: 11,
+    fontFamily: 'Inter_600SemiBold',
+    color: Colors.dark.tint,
+  },
+  toleranceSlider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  toleranceBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: Colors.dark.surfaceElevated,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: Colors.dark.border,
+  },
+  toleranceTrack: {
+    flex: 1,
+    height: 6,
+    backgroundColor: Colors.dark.border,
+    borderRadius: 3,
+    overflow: 'hidden',
+  },
+  toleranceFill: {
+    height: 6,
+    backgroundColor: Colors.dark.tint,
+    borderRadius: 3,
+  },
+  toleranceHint: {
+    fontSize: 10,
+    fontFamily: 'Inter_400Regular',
+    color: Colors.dark.textTertiary,
+    marginTop: 6,
+    lineHeight: 14,
   },
   videoButtons: {
     flexDirection: 'row',
