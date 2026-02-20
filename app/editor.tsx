@@ -373,7 +373,15 @@ export default function EditorScreen() {
           )}
 
           <GestureDetector gesture={composed}>
-            <Animated.View style={[styles.tattooOverlay, tattooStyle]}>
+            <Animated.View
+              style={[
+                styles.tattooOverlay,
+                tattooStyle,
+                Platform.OS === 'web' && blendMode !== 'normal'
+                  ? { mixBlendMode: blendMode } as any
+                  : undefined,
+              ]}
+            >
               <Image
                 source={{ uri: session.designUri }}
                 style={styles.tattooImage}

@@ -501,7 +501,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/v1/jobs/:jobId", (req: Request, res: Response) => {
     try {
-      const { jobId } = req.params;
+      const jobId = req.params.jobId as string;
       const job = jobQueue.getJob(jobId);
       if (!job) {
         return res.status(404).json({ error: "Job not found" });
@@ -515,7 +515,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.get("/api/v1/jobs/session/:sessionId", (req: Request, res: Response) => {
     try {
-      const { sessionId } = req.params;
+      const sessionId = req.params.sessionId as string;
       const jobs = jobQueue.getSessionJobs(sessionId);
       return res.json({ jobs });
     } catch (error) {
@@ -526,7 +526,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/v1/jobs/:jobId/cancel", (req: Request, res: Response) => {
     try {
-      const { jobId } = req.params;
+      const jobId = req.params.jobId as string;
       const cancelled = jobQueue.cancelJob(jobId);
       if (!cancelled) {
         return res.status(400).json({ error: "Job cannot be cancelled (not found or already finished)" });
@@ -540,7 +540,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/v1/session/:sessionId/save", (req: Request, res: Response) => {
     try {
-      const { sessionId } = req.params;
+      const sessionId = req.params.sessionId as string;
       cancelEphemeralCleanup(sessionId);
       return res.json({ saved: true, sessionId });
     } catch (error) {
@@ -551,7 +551,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post("/api/v1/session/:sessionId/ephemeral", (req: Request, res: Response) => {
     try {
-      const { sessionId } = req.params;
+      const sessionId = req.params.sessionId as string;
       const { delayMs } = req.body;
       scheduleEphemeralCleanup(sessionId, delayMs || 1800000);
       return res.json({ scheduled: true, sessionId, deleteAfterMs: delayMs || 1800000 });
@@ -565,7 +565,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     "/api/v1/session/:sessionId",
     async (req: Request, res: Response) => {
       try {
-        const { sessionId } = req.params;
+        const sessionId = req.params.sessionId as string;
         if (!sessionId || sessionId.length < 10) {
           return res.status(400).json({ error: "Invalid session ID" });
         }
