@@ -31,6 +31,7 @@ import { moderateContent, moderateDesign, validateConsent } from "./policy-gate"
 import { stripExif, generateSignedUrl, scheduleEphemeralCleanup, cancelEphemeralCleanup } from "./privacy";
 import { jobQueue } from "./job-queue";
 import type { NewJob } from "./job-queue";
+import { removeBackground } from "./background-removal";
 
 const upload = multer({
   dest: path.join(getUploadDir(), "tmp"),
@@ -264,19 +265,92 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         await stripExif(destPath);
 
-        const signedUrl = generateSignedUrl(destPath);
+        const removeBg = req.body.removeBg !== 'false';
+        const tolerance = parseInt(req.body.tolerance as string, 10) || 30;
+        let processedPath = destPath;
+        let bgRemoved = false;
+
+        if (removeBg && req.file.mimetype !== 'image/svg+xml') {
+          try {
+            const processedFilePath = path.join(sessionDir, `design_transparent.png`);
+            await removeBackground(destPath, processedFilePath, {
+              tolerance,
+              mode: 'auto',
+            });
+            processedPath = processedFilePath;
+            bgRemoved = true;
+          } catch (bgErr) {
+            console.error("Background removal failed, using original:", bgErr);
+          }
+        }
+
+        const signedUrl = generateSignedUrl(processedPath);
+        const originalSignedUrl = bgRemoved ? generateSignedUrl(destPath) : undefined;
 
         return res.json({
           sessionId,
-          filePath: destPath,
+          filePath: processedPath,
           signedUrl,
+          originalSignedUrl,
           originalName: req.file.originalname,
-          mimeType: req.file.mimetype,
+          mimeType: bgRemoved ? 'image/png' : req.file.mimetype,
           size: req.file.size,
+          bgRemoved,
         });
       } catch (error) {
         console.error("Upload design error:", error);
         return res.status(500).json({ error: "Upload failed" });
+      }
+    }
+  );
+
+  app.post(
+    "/api/v1/process/remove-background",
+    uploadLimiter,
+    upload.single("file"),
+    async (req: Request, res: Response) => {
+      try {
+        if (!req.file) {
+          return res.status(400).json({ error: "No file provided" });
+        }
+
+        const tolerance = parseInt(req.body.tolerance as string, 10) || 30;
+        const mode = (req.body.mode as string) || 'auto';
+
+        const sessionId = (req.body.sessionId as string) || generateSessionId();
+        const sessionDir = getSessionDir(sessionId);
+        const outputPath = path.join(sessionDir, `design_transparent.png`);
+
+        let targetColor: { r: number; g: number; b: number } | undefined;
+        if (mode === 'color' && req.body.colorR && req.body.colorG && req.body.colorB) {
+          targetColor = {
+            r: parseInt(req.body.colorR, 10),
+            g: parseInt(req.body.colorG, 10),
+            b: parseInt(req.body.colorB, 10),
+          };
+        }
+
+        await removeBackground(req.file.path, outputPath, {
+          tolerance,
+          mode: mode as 'auto' | 'white' | 'color',
+          targetColor,
+        });
+
+        fs.unlinkSync(req.file.path);
+
+        const signedUrl = generateSignedUrl(outputPath);
+
+        return res.json({
+          sessionId,
+          signedUrl,
+          filePath: outputPath,
+          bgRemoved: true,
+          tolerance,
+          mode,
+        });
+      } catch (error) {
+        console.error("Background removal error:", error);
+        return res.status(500).json({ error: "Background removal failed" });
       }
     }
   );
